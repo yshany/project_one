@@ -1,0 +1,312 @@
+---
+title: Exploring the differences between the presidents who get reelected and who
+  not
+output:
+  html_document: default
+  html_notebook: default
+---
+What indicates a president (trump) get reelected? We know it is highly depend on their performance in the first term. But can we find some clue in their first speech? There might be trival relations. let's explore the differences bettween those of  who got reelected and not. 
+
+
+##install and load the package
+```{r,warning=FALSE} 
+packages.used=c(                "dplyr", "tidytext","sentimentr","openNLP","qdap",'ggplot2','reshape','syuzhet','radarchart','tidyr')
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE,
+                   repos='http://cran.us.r-project.org')
+}
+library(plyr)
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+library(dplyr)
+library(tidytext)
+library("sentimentr")
+library("qdap")
+library('ggplot2')
+library('reshape')
+library('syuzhet')
+library(radarchart)
+library('tidyr')
+```
+
+##Input and process the data 
+```{r}
+#setwd('E:/ads/ADS_Teaching/Projects_startercodes/Project1-RNotebook/data/InauguralSpeeches')
+folder.path="../data/InauguralSpeeches/"
+speeches=list.files(path = folder.path, pattern = "*.txt")
+prex.out=substr(speeches, 6, nchar(speeches)-4)
+
+ff.all<-Corpus(DirSource(folder.path))
+ff.allcp=ff.all
+ff.all<-tm_map(ff.all, stripWhitespace)
+ff.all<-tm_map(ff.all, content_transformer(tolower))
+ff.all<-tm_map(ff.all, removeWords, stopwords("english"))
+ff.all<-tm_map(ff.all, removeWords, character(0))
+ff.all<-tm_map(ff.all, removePunctuation)
+ff.all<- tm_map(ff.all, stemDocument, language = "english") 
+tdm.all<-TermDocumentMatrix(ff.all)
+tdm.s <- removeSparseTerms(tdm.all,0.8)
+tdf.s <- as.data.frame(as.matrix(tdm.s))
+tdf <- as.data.frame(as.matrix(tdm.all))
+```
+
+
+##Speech basic stats: words count, sentences count, avergae words per sentences
+```{r}
+#utils
+sentence_count=function(x)
+{
+seq = sent_detect(x,endmarks = c("?", ".", "!", "|",";"))
+return(length(seq))  
+  
+}
+
+
+sc=unlist(lapply(ff.allcp,sentence_count))
+wc=colSums(tdf)
+ra=wc/sc
+wordstat=data.frame(sc=scale(sc),wc=scale(wc),ratio=scale(ra))[c(1:58),]
+wordstat=wordstat[order(wordstat$wc,wordstat$sc),]
+new_name=gsub('inaug','',row.names(wordstat))
+new_name=gsub('.txt','',new_name)
+row.names(wordstat)=new_name
+wordstat$names=factor(row.names(wordstat),levels=row.names(wordstat))
+wordstat$term='first without reelected'
+wordstat$term[grepl('-2',row.names(wordstat))]='second'
+first=wordstat$names[grepl('-2',row.names(wordstat))]
+first=paste0(sapply(strsplit(as.character(first),'-'),'[',1),'-1')
+wordstat[wordstat$names %in% first,]$term='first with reelected'
+wordstat$term=factor(wordstat$term)
+
+
+ggplot(wordstat, aes( y = names ),fill=c('words','sentences','average words per sentences'))+
+   theme(text = element_text(size=7))+
+  geom_point(aes(x = wc),color='red') +
+  geom_point(aes(x = sc),color='blue')+
+  geom_point(aes(x = ratio),color='green')+
+  ylab("president-term") + xlab("wc/sc/wc:sc")
+```
+Overview of words count, sentences count, avergae words per sentences, a qqplot of word count (red dots) of each speech and its corresponding number of sentences(blue) and averge words per sentences(green). We can find out these three variables have strong colerration. This is pretty real, because in general, more words tends to have more sentences and longer sentence in avergae in  and other way arround. It is hard to figure out the differences between one-term presidents and reelected ones in this plot. but we can rounghly see that generally most of two-term speech is in the middle and bottom of the plot.
+```{r}
+wordstat.m=melt(wordstat, id.vars=c('names','term'))
+
+median.wc=tapply(wordstat$wc,wordstat$term,median)
+median.sc=tapply(wordstat$sc,wordstat$term,median)
+median.sc=tapply(wordstat$sc,wordstat$term,median)
+stats=c('wc','sc','wc/sc')
+p2 <- ggplot(wordstat.m, aes(x=variable,y=value,fill=variable))+
+  geom_boxplot() +geom_hline(yintercept=0,color = "red", size=1)+facet_wrap(~term)+xlab('wc/sc/wc:sc')+ylab('normalized score')
+p2
+
+```
+From this grouped box-plot we can clearly see that one-termers talks more than reelected ones, and the reelected ones talk even less in their second term. 
+
+Do more talk less, and you might be reelected.
+```{r}
+trump=wordstat[grepl('Trump',wordstat$names),]
+trump
+```
+Trump tends to give comparetively shortter sentences and shotter speech.
+So he might be get reelected according to this criteria. I don't think this is correct. At least he is too old to get another round.
+
+##Corpus analysis in depth
+```{r,warning=FALSE}
+frek=function(x)
+{return(x/sum(x))}
+extra=function(x) {a=aov(formula = x, data = tdfs1)
+vn=strsplit(as.character(x),'~')[2]
+return(sign(a$coefficients[2])*summary(a)[[1]][,2][1])}
+tdfs1=data.frame(apply(tdf.s,1,frek))
+tdfs1=tdfs1[-(c(grep('-2',names(tdf.s)))),]
+first=wordstat$names[grepl('-2',row.names(wordstat))]
+first=paste0('inaug',sapply(strsplit(as.character(first),'-'),'[',1),'-1')
+tdfs1$reelected=0
+tdfs1[first,]$reelected=1
+#tdfs1$reelected=factor(tdfs1$reelected)
+models <- lapply(paste( names(tdfs1),'reelected', sep = "~"), formula)
+aov.models <- sapply(models, FUN = extra )
+df=data.frame(word=names(tdfs1),importance=aov.models)
+df=df[order(-df$importance),]
+df$abs=sign(df$importance)*df$importance
+df$sign=factor(sign(df$importance))
+df$word=factor(df$word,levels=df$word)
+ggplot(df[c(1:10,868:877),], aes(x=word,y=abs,fill=sign))+
+  geom_bar(stat = "identity" )+ theme(axis.text.x=element_text(angle = -90, hjust = 0))+ylab('importance')
+```
+Did one way anova of each token towards the target variable (weather reelected or not), find the best 10 that faciliate the reelection and the opposite. The best 10 seems to be more negative and stronger. 
+
+
+```{r}
+ff.allcp<-tm_map(ff.allcp, stripWhitespace)
+ff.allcp<-tm_map(ff.allcp, content_transformer(tolower))
+ff.allcp<-tm_map(ff.allcp, removeWords, stopwords("english"))
+ff.allcp<-tm_map(ff.allcp, removeWords, character(0))
+ff.allcp<-tm_map(ff.allcp, removePunctuation)
+tdm.all<-TermDocumentMatrix(ff.allcp)
+tdm.tidy=tidy(tdm.all)
+tdm.tidy1=tdm.tidy[tdm.tidy$document %in% paste0(first,'.txt'),]
+tdm.tidy2=tdm.tidy[tdm.tidy$document %in% paste0('inaug',wordstat$names[grepl('-2',row.names(wordstat))],'.txt'),]
+no_reel=setdiff(unique(tdm.tidy$document),c(paste0('inaug',wordstat$names[grepl('-2',row.names(wordstat))],'.txt'),paste0(first,'.txt')))
+tdm.tidy3=tdm.tidy[tdm.tidy$document %in% no_reel,]
+tdm.overall1=ddply(tdm.tidy1,.(term) , function(x){sum(x$count)})
+tdm.tidy3=tdm.tidy3[order(-tdm.tidy3$count),][1:500,]
+tdm.overall3=ddply(tdm.tidy3,.(term) , function(x){sum(x$count)})
+par(mfrow=c(1,2))
+wordcloud(tdm.tidy1$term, tdm.overall1$V1,
+          scale=c(3,0.3),
+          max.words=50,
+          min.freq=1,
+          random.order=FALSE,
+          rot.per=0.3,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9,"Reds"))
+
+
+```
+Word Could for those who got reelected. 
+```{r}
+
+wordcloud(tdm.tidy3$term, tdm.overall3$V1,
+          scale=c(3,0.3),
+          max.words=50,
+          min.freq=1,
+          random.order=FALSE,
+          rot.per=0.3,
+          use.r.layout=T,
+          random.color=FALSE,
+          colors=brewer.pal(9,"Blues"))
+```
+Word Could for those who didn't get reelected.
+
+##About the word republican
+```{r}
+ff.all<-Corpus(DirSource(folder.path))
+dat <- data.frame(text=unlist(lapply(ff.allcp,sent_detect)), stringsAsFactors = FALSE)
+rep=Search(dat, "republican")
+rep[c(25,26,5)]
+```
+There are more than 30 sentences mentioned republicans. I randomly picked 3 shorter one. Of cause, we can guess what does these sentences express easily, either critizing their oponents or praise themselves.
+```{r}
+ave_sent=function(x){
+emotions=get_nrc_sentiment(x)
+    word.count=word_count(x)
+    emotions=as.numeric(emotions)/(word.count+0.01)
+  
+}
+em=sapply(rep,ave_sent)%>%apply(1,mean)
+enmormal=ave_sent(da)
+ave=data.frame(c("anger"    ,    "anticipation", "disgust"  ,    "fear"      ,   "joy"      ,    "sadness"    ,  "surprise"  ,   "trust"     , "negative"   ,  "positive"  ),'republicanmentioned'=em,"overall"=enmormal)
+names(ave)=c('republican mentioned','overall')
+chartJSRadar(scores =ave, maxScale = 0.05, showToolTipLabel = TRUE)
+```
+Here is the raddar plot of average words sentiment score. The emotion blows up when republican get mentioned, which quite accord with our 'guessing'.
+```{r}
+tdm.tidy1$class=1
+tdm.tidy2$class=2
+tdm.tidy3$class=3
+tdm.tidyall=rbind(tdm.tidy1,tdm.tidy2,tdm.tidy3)
+ave_first_re=colSums(get_nrc_sentiment(unique(tdm.tidy1$term))*tdm.tidy$count)/sum(tdm.tidy$count)
+ave_second=colSums(get_nrc_sentiment(unique(tdm.tidy3$term))*tdm.tidy$count)/sum(tdm.tidy$count)
+ave_first=colSums(get_nrc_sentiment(unique(tdm.tidy2$term))*tdm.tidy$count)/sum(tdm.tidy$count)
+ave=data.frame(row.names(ave),ave_first_re,ave_second,ave_first)
+chartJSRadar(scores =ave, maxScale = 0.02, showToolTipLabel = TRUE)
+```
+I made another plot to analyze the sentiment differences between president speech in the groups that first elected without reelected, second elected and first elected with reelected. There is no significant differences bettween the groups of two type of first elected president. However for the second term speech turns out to be more emotional.
+Altavergaehough the difference is very trival. The first elected with reelected group has more score in positive,trust and anticipation, less score in negative.
+```{r,warning=T}
+#setwd('E:/ads/ADS_Teaching/Projects_startercodes/Project1-RNotebook/data/')
+#date=read.delim(file='E:/ads/ADS_Teaching/Projects_startercodes/Project1-RNotebook/data/InauguationDates.txt')
+date=read.delim(file='../data/InauguationDates.txt')
+names(date)=c('names','1','2','3','4')
+date$'1'=sapply(strsplit(as.character(date$'1'),'/'),'[',3)
+date$'2'=sapply(strsplit(as.character(date$'2'),'/'),'[',3)
+dlong=reshape(date,direction='long',timevar='term',v.names='year',times=c('1','2','3','4'),varying=c('1','2','3','4'))
+dlong$term=as.character(dlong$term)
+dlong=unite(dlong,'document',sep='-',one_of(c('names','term')))
+dlong$document=paste0('inaug',dlong$document,'.txt')
+p1=sapply(strsplit(as.character(dlong$document),' '),'[',1)
+p2=ifelse(is.na(sapply(strsplit(as.character(dlong$document),' '),'[',3)),sapply(strsplit(as.character(dlong$document),' '),'[',2),sapply(strsplit(as.character(dlong$document),' '),'[',3))
+dlong$document=paste0(p1,p2)
+wrap=function(x)
+{
+colSums(get_nrc_sentiment(unique(x$term))*x$count)/sum(x$count)  
+  
+}
+all=merge(dlong,tdm.tidy)
+table=ddply(all,.(year),wrap)
+ggplot(data=table, aes(x = year,group=1)) + 
+  geom_point(aes(y=anger,colour='anger'))+
+  geom_path(aes(y=anger,colour='anger'))+
+  geom_point(aes(y=anticipation,colour='anticipation'))+
+  geom_path(aes(y=anticipation,colour='anticipation'))+
+  geom_point(aes(y=disgust,colour='disgust'))+
+  geom_path(aes(y=disgust,colour='disgust'))+
+  geom_point(aes(y=fear,colour='fear'))+
+  geom_path(aes(y=fear,colour='fear'))+
+  geom_point(aes(y=joy,colour='joy'))+
+  geom_path(aes(y=joy,colour='joy'))+
+  geom_point(aes(y=sadness,colour='sadness'))+
+  geom_path(aes(y=sadness,colour='sadness'))+
+  geom_point(aes(y=surprise,colour='surprise'))+
+  geom_path(aes(y=surprise,colour='surprise'))+
+  geom_point(aes(y=negative,colour='negative'))+
+  geom_path(aes(y=negative,colour='negative'))+
+  geom_point(aes(y=positive,colour='positive'))+
+  geom_path(aes(y=positive,colour='positive'))+
+  geom_point(aes(y=trust,colour='trust'))+
+  geom_path(aes(y=trust,colour='trust'))+
+  theme(axis.text.x=element_text(angle = -90, hjust = 0))+
+  ggtitle('average sentiment by time')
+```
+
+##topic model
+```{r}
+folder.path="../data/InauguralSpeeches/"
+speeches=paste0(first,'.txt')
+myStopwords <- c("can", "say","one","way","use","also","howev","tell","will",
+"much","need","take","tend","even",
+"like","particular","rather","said",
+"get","well","make","ask","come","end",
+"first","two","help","often","may",
+"might","see","someth","thing","point",
+"post","look","right","now","think","¡®ve ",
+"¡®re ","anoth","put","set","new","good",
+"want","sure","kind","larg","yes,","day","etc",
+"quit","sinc","attempt","lack","seen","awar",
+"littl","ever","moreov","though","found","abl",
+"enough","far","earli","away","achiev","draw",
+"last","never","brief","bit","entir","brief",
+"great","lot")
+docs <- tm_map(ff.all, removeWords, myStopwords)
+dtm <- DocumentTermMatrix(docs)
+rownames(dtm) <- unique(tdm.tidy$document)
+
+library(topicmodels)
+ 
+
+burnin <- 4000
+iter <- 2000
+thin <- 500
+seed <-list(2003,5,63,100001,765)
+nstart <- 5
+best <- TRUE
+
+k <- 5
+ldaOut <-LDA(dtm,k, method="Gibbs", control=list(nstart=nstart, seed = seed, best=best, burnin = burnin, iter = iter, thin=thin))
+ldaOut.topics <- as.matrix(topics(ldaOut))
+ldaOut.topics 
+ldaOut.terms <- as.matrix(terms(ldaOut,6))
+```
+
+
+
+
+
